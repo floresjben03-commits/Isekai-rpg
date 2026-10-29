@@ -1,0 +1,117 @@
+<!doctype html>
+<html lang="es">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1,maximum-scale=1,user-scalable=no">
+<meta name="theme-color" content="#18251c">
+<title>Isekai RPG</title>
+<style>
+*{box-sizing:border-box;touch-action:manipulation}
+html,body{margin:0;width:100%;height:100%;overflow:hidden;background:#101812;color:#f4f0df;font-family:system-ui,Arial,sans-serif}
+#wrap{height:100dvh;display:flex;flex-direction:column;max-width:620px;margin:auto;background:#1a281d}
+header{padding:8px 12px;background:#263a2b;display:flex;justify-content:space-between;gap:8px;font-weight:700;font-size:14px}
+#stats{display:flex;gap:10px;flex-wrap:wrap;font-size:12px;font-weight:600;padding:7px 10px;background:#17241a}
+#game{display:block;width:100%;flex:1;min-height:0;image-rendering:pixelated;background:#6b9856}
+#controls{display:grid;grid-template-columns:1fr 1.15fr;gap:12px;padding:10px;background:#202e23;user-select:none}
+#pad{display:grid;grid-template-columns:repeat(3,1fr);grid-template-rows:repeat(3,42px);gap:4px;max-width:190px;width:100%;justify-self:center}
+button{border:1px solid #748a6e;border-radius:10px;background:#394e3b;color:#fff8e5;font-size:14px;font-weight:700;min-height:40px;touch-action:none;user-select:none;-webkit-user-select:none}
+button:active{background:#718c54;transform:scale(.97)}
+#up{grid-column:2;grid-row:1}#left{grid-column:1;grid-row:2}#down{grid-column:2;grid-row:2}#right{grid-column:3;grid-row:2}
+#actions{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:6px;align-content:center}
+#actions button{min-height:42px}
+#message{min-height:25px;padding:5px 10px;background:#17241a;font-size:12px;text-align:center;color:#f0dca1}
+#panel{position:absolute;left:8%;right:8%;top:25%;background:#1c2c20;border:2px solid #9eaf76;border-radius:14px;padding:16px;display:none;box-shadow:0 8px 30px #0009}
+#panel h3{margin:0 0 10px}#panel p{font-size:14px}#panel button{width:100%;margin-top:6px}
+@media(min-height:800px){#pad{grid-template-rows:repeat(3,48px)}}
+</style>
+</head>
+<body>
+<div id="wrap">
+<header><span>⚔️ ISEKAI RPG</span><span id="level">Nivel 1</span></header>
+<div id="stats"><span id="hp">❤️ HP 100/100</span><span id="mp">🔷 MP 40/40</span><span id="gold">🪙 0</span><span id="xp">XP 0/30</span></div>
+<canvas id="game" width="360" height="520" aria-label="Mapa del juego"></canvas>
+<div id="message">Explorá el bosque. Acercate a los monstruos y atacá.</div>
+<div id="controls">
+<div id="pad">
+<button id="up" data-dir="up" aria-label="Arriba">▲</button>
+<button id="left" data-dir="left" aria-label="Izquierda">◀</button>
+<button id="down" data-dir="down" aria-label="Abajo">▼</button>
+<button id="right" data-dir="right" aria-label="Derecha">▶</button>
+</div>
+<div id="actions">
+<button data-act="attack">⚔️ ATQ</button>
+<button data-act="magic">✨ MAG</button>
+<button data-act="ether">🔷 ÉTER</button>
+<button data-act="menu">🎒 MENÚ</button>
+</div>
+</div>
+</div>
+<div id="panel"><h3 id="panelTitle">Mochila</h3><div id="panelBody"></div><button id="close">Cerrar</button></div>
+<script>
+(()=> {
+const canvas=document.getElementById('game'), ctx=canvas.getContext('2d');
+const W=360,H=520,T=32, MAPW=32,MAPH=42;
+let held={up:false,down:false,left:false,right:false}, keys={};
+let player={x:16*T+T/2,y:20*T+T/2,hp:100,maxhp:100,mp:40,maxmp:40,level:1,xp:0,gold:0,atk:18};
+let monsters=[{x:13*T+16,y:17*T+16,hp:36,maxhp:36,alive:true},{x:20*T+16,y:22*T+16,hp:48,maxhp:48,alive:true},{x:18*T+16,y:14*T+16,hp:30,maxhp:30,alive:true}];
+let message='Explorá el bosque. Acercate a los monstruos y atacá.';
+let last=performance.now(), panelOpen=false;
+function isTreeTile(x,y){return ((x*17+y*31)%23===0)||((x*7+y*13)%41===0)}
+function tile(x,y){
+ if(x<0||y<0||x>=MAPW||y>=MAPH)return 1;
+ if(x===0||y===0||x===MAPW-1||y===MAPH-1)return 1;
+ // El camino tiene prioridad: forma un pequeño puente sobre el río.
+ if(y>=24&&y<=25)return 3;
+ if(x>=14&&x<=17&&y>=12&&y<=17)return 3;
+ if((x===5||x===6)&&y>4&&y<36)return 2;
+ if(isTreeTile(x,y))return 1;
+ return 0
+}
+function blocked(x,y){
+ const r=6; // radio de colisión del héroe
+ const samples=[[x-r,y],[x+r,y],[x,y-r],[x,y+r]];
+ for(const [px,py] of samples){
+  const tx=Math.floor(px/T),ty=Math.floor(py/T);
+  if(tx<=0||ty<=0||tx>=MAPW-1||ty>=MAPH-1)return true;
+  const typ=tile(tx,ty);
+  if(typ===2)return true; // agua: solo se cruza por el puente
+  if(typ===1){
+   // Los árboles solo bloquean cerca del tronco, no toda la copa.
+   if(isTreeTile(tx,ty)){
+    const cx=tx*T+T/2,cy=ty*T+T/2;
+    if(Math.abs(px-cx)<6 && Math.abs(py-cy)<8)return true;
+   } else return true;
+  }
+ }
+ return false
+}
+function drawTile(x,y,type,sx,sy){ctx.fillStyle=type===0?'#70a354':type===1?'#335b37':type===2?'#397f9c':'#bca36b';ctx.fillRect(sx,sy,T,T);
+ if(type===0){ctx.fillStyle='#81b45e';ctx.fillRect(sx+4,sy+7,3,3);ctx.fillRect(sx+22,sy+23,2,2)}
+ if(type===1){ctx.fillStyle='#24442c';ctx.beginPath();ctx.arc(sx+16,sy+13,13,0,Math.PI*2);ctx.fill();ctx.fillStyle='#654b32';ctx.fillRect(sx+13,sy+18,6,14)}
+ if(type===2){ctx.strokeStyle='#68b2c5';ctx.beginPath();ctx.moveTo(sx+4,sy+9);ctx.lineTo(sx+25,sy+9);ctx.moveTo(sx+8,sy+22);ctx.lineTo(sx+29,sy+22);ctx.stroke()}
+}
+function drawChar(x,y,color,kind){ctx.fillStyle='#172017';ctx.fillRect(x-7,y+5,14,10);ctx.fillStyle=color;ctx.fillRect(x-7,y-7,14,14);ctx.fillStyle='#f2d5a3';ctx.fillRect(x-5,y-13,10,9);ctx.fillStyle='#25231c';ctx.fillRect(x-3,y-10,2,2);ctx.fillRect(x+2,y-10,2,2);if(kind==='monster'){ctx.fillStyle='#e7b1a0';ctx.fillRect(x-8,y-15,5,5);ctx.fillRect(x+3,y-15,5,5)}}
+function render(){ctx.clearRect(0,0,W,H);let ox=player.x-W/2,oy=player.y-H/2;
+ for(let sy=-T;sy<H+T;sy+=T)for(let sx=-T;sx<W+T;sx+=T){let wx=Math.floor((sx+ox)/T),wy=Math.floor((sy+oy)/T);drawTile(wx,wy,tile(wx,wy),sx-(ox%T),sy-(oy%T))}
+ // flowers
+ for(let y=0;y<MAPH;y++)for(let x=0;x<MAPW;x++){if((x*11+y*5)%37===0){let sx=x*T-ox,sy=y*T-oy;if(sx>-8&&sx<W+8&&sy>-8&&sy<H+8){ctx.fillStyle='#f4df91';ctx.fillRect(sx+13,sy+13,4,4)}}}
+ monsters.forEach(m=>{if(m.alive){let x=m.x-ox,y=m.y-oy;if(x>-30&&x<W+30&&y>-30&&y<H+30){drawChar(x,y,'#a85b5b','monster');ctx.fillStyle='#301b1b';ctx.fillRect(x-13,y-22,26,4);ctx.fillStyle='#e85c52';ctx.fillRect(x-13,y-22,26*m.hp/m.maxhp,4)}}});
+ drawChar(W/2,H/2,'#4b79c8','player');
+}
+function updateStats(){document.getElementById('hp').textContent=`❤️ HP ${player.hp}/${player.maxhp}`;document.getElementById('mp').textContent=`🔷 MP ${player.mp}/${player.maxmp}`;document.getElementById('gold').textContent=`🪙 ${player.gold}`;document.getElementById('xp').textContent=`XP ${player.xp}/${player.level*30}`;document.getElementById('level').textContent=`Nivel ${player.level}`;document.getElementById('message').textContent=message}
+function tick(now){let dt=Math.min((now-last)/16.67,2);last=now;let dx=(held.right||keys.ArrowRight?1:0)-(held.left||keys.ArrowLeft?1:0),dy=(held.down||keys.ArrowDown?1:0)-(held.up||keys.ArrowUp?1:0);if(dx&&dy){dx*=.707;dy*=.707}let nx=player.x+dx*2.6*dt,ny=player.y+dy*2.6*dt;if(!blocked(nx,player.y))player.x=nx;if(!blocked(player.x,ny))player.y=ny;
+ monsters.forEach(m=>{if(!m.alive)return;let vx=player.x-m.x,vy=player.y-m.y,d=Math.hypot(vx,vy);if(d<145&&d>24){let mx=m.x+vx/d*.55*dt,my=m.y+vy/d*.55*dt;if(!blocked(mx,my)){m.x=mx;m.y=my}}else if(d<27&&Math.random()<.018){player.hp=Math.max(0,player.hp-3);if(!player.hp){player.hp=50;player.x=16*T+16;player.y=20*T+16;message='Te derrotaron y regresaste al bosque. ¡Intentá otra vez!'}updateStats()}});render();requestAnimationFrame(tick)}
+function nearest(){return monsters.filter(m=>m.alive).sort((a,b)=>Math.hypot(a.x-player.x,a.y-player.y)-Math.hypot(b.x-player.x,b.y-player.y))[0]}
+function hit(damage,magic){let m=nearest();if(!m||Math.hypot(m.x-player.x,m.y-player.y)>(magic?150:60)){message='No hay monstruos cerca.';updateStats();return}m.hp-=damage;if(m.hp<=0){m.alive=false;player.xp+=15;player.gold+=5;if(player.xp>=player.level*30){player.xp-=player.level*30;player.level++;player.maxhp+=10;player.maxmp+=5;player.hp=player.maxhp;player.mp=player.maxmp;message='¡Subiste al nivel '+player.level+'!'}else message='¡Monstruo derrotado! +15 XP, +5 monedas.'}else message=magic?'¡Lanzaste magia!':'¡Golpeaste al monstruo!';updateStats()}
+function menu(){panelOpen=true;document.getElementById('panelTitle').textContent='Mochila y estado';document.getElementById('panelBody').innerHTML=`<p>Nivel: ${player.level} · Oro: ${player.gold}</p><p>Pociones: 2 · Éteres: 2</p><p>Un héroe que se prepara para la aventura.</p><button id="potion">🧪 Usar poción (+35 HP)</button><button id="gear">🛡️ Equipamiento: espada sencilla</button><button id="status">📜 Estado del héroe</button>`;document.getElementById('panel').style.display='block';document.getElementById('potion').onclick=()=>{player.hp=Math.min(player.maxhp,player.hp+35);message='Recuperaste HP.';updateStats();menu()};document.getElementById('gear').onclick=()=>{message='Espada sencilla equipada.';updateStats()};document.getElementById('status').onclick=()=>{document.getElementById('panelBody').innerHTML=`<p>Nivel ${player.level}</p><p>HP ${player.hp}/${player.maxhp}</p><p>MP ${player.mp}/${player.maxmp}</p><p>Ataque ${player.atk}</p>`}}
+function action(a){if(a==='attack')hit(player.atk,false);if(a==='magic'){if(player.mp<10){message='No tenés MP suficiente.'}else{player.mp-=10;hit(28,true)}}if(a==='ether'){player.mp=Math.min(player.maxmp,player.mp+20);message='¡Recuperaste 20 MP!';}if(a==='menu')menu();updateStats()}
+document.querySelectorAll('[data-dir]').forEach(b=>{let d=b.dataset.dir;const start=e=>{e.preventDefault();held[d]=true};const stop=e=>{e.preventDefault();held[d]=false};b.addEventListener('pointerdown',start);['pointerup','pointercancel','pointerleave'].forEach(ev=>b.addEventListener(ev,stop));});
+document.querySelectorAll('[data-act]').forEach(b=>{b.addEventListener('pointerdown',e=>{e.preventDefault();action(b.dataset.act)})});
+document.getElementById('close').addEventListener('click',()=>{document.getElementById('panel').style.display='none';panelOpen=false});
+document.addEventListener('keydown',e=>{keys[e.key]=true;if(e.key===' '){action('attack');e.preventDefault()}if(e.key.toLowerCase()==='m')action('magic')});
+document.addEventListener('keyup',e=>keys[e.key]=false);
+updateStats();requestAnimationFrame(tick);
+})();
+</script>
+</body>
+</html>
